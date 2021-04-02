@@ -2,7 +2,9 @@ package s3fs
 
 import (
 	"fmt"
+	"io"
 	"io/fs"
+	"path"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -23,7 +25,7 @@ func NewS3FS(client *s3.S3, bucket string) fs.FS {
 }
 
 func (s *s3FS) Open(name string) (fs.File, error) {
-	headres, err := s.client.HeadObject(&s3.HeadObjectInput{
+	object, err := s.client.GetObject(&s3.GetObjectInput{
 		Bucket: &s.bucket,
 		Key:    &name,
 	})
@@ -33,46 +35,74 @@ func (s *s3FS) Open(name string) (fs.File, error) {
 	// then we still want to check if it's a directory. Any other failure we wrap
 	// and propagate.
 	if err == nil {
-		file := s3File{fileInfo: s3FileInfo{name: name, mode: fs.FileMode(0400)}}
-
-		if headres.ContentLength != nil {
-			file.fileInfo.size = *headres.ContentLength
-		}
-
-		if headres.LastModified != nil {
-			file.fileInfo.modTime = *headres.LastModified
-		}
-
-		return &file, nil
+		return &s3File{
+			body: object.Body,
+			fileInfo: s3FileInfo{
+				name:    path.Base(name),
+				mode:    fs.FileMode(0400),
+				size:    *object.ContentLength,
+				modTime: *object.LastModified,
+			},
+		}, nil
 	}
 
 	awsErr, ok := err.(awserr.Error)
 	if !ok {
-		return nil, fmt.Errorf("error HEADing s3 file: %w", err)
+		return nil, fmt.Errorf("error GETing s3 file: %w", err)
 	}
 
 	if awsErr.Code() != s3.ErrCodeNoSuchKey {
-		return nil, fmt.Errorf("error HEADing s3 file: %w", err)
+		return nil, fmt.Errorf("error GETing s3 file: %w", err)
 	}
 
-	// if we got here the key didn't exist, so check to see if `name` is a directory
-	listres, err := s.client.ListObjectsV2(&s3.ListObjectsV2Input{
-		Bucket:  &s.bucket,
-		MaxKeys: aws.Int64(1),
-		Prefix:  aws.String(name),
-	})
+	entries := []fs.DirEntry{}
+	err = s.client.ListObjectsV2Pages(
+		&s3.ListObjectsV2Input{
+			Bucket:    &s.bucket,
+			Delimiter: aws.String("/"),
+			Prefix:    aws.String(name),
+		},
+		func(page *s3.ListObjectsV2Output, lastPage bool) bool {
+			for _, obj := range page.Contents {
+				entries = append(
+					entries,
+					&s3FileInfo{
+						name:    path.Base(*obj.Key),
+						mode:    fs.FileMode(0400),
+						size:    *obj.Size,
+						modTime: *obj.LastModified,
+					},
+				)
+			}
+
+			for _, cp := range page.CommonPrefixes {
+				entries = append(
+					entries,
+					&s3FileInfo{
+						name: path.Base(*cp.Prefix),
+						mode: fs.FileMode(0400) | fs.ModeDir,
+						size: 0,
+					},
+				)
+			}
+
+			return true
+		},
+	)
 
 	if err != nil {
 		return nil, fmt.Errorf("error listing s3 dir: %w", err)
 	}
 
-	if listres.KeyCount == nil || *listres.KeyCount == 0 {
+	if len(entries) == 0 {
 		return nil, fs.ErrNotExist
 	}
 
 	return &s3Directory{
+		entries: entries,
+		ptr:     0,
 		fileInfo: s3FileInfo{
-			name: name,
+			name: path.Base(name),
 			mode: fs.FileMode(0400) | fs.ModeDir,
 			size: 0,
 		},
@@ -110,7 +140,16 @@ func (fi *s3FileInfo) Sys() interface{} {
 	return nil
 }
 
+func (fi *s3FileInfo) Info() (fs.FileInfo, error) {
+	return fi, nil
+}
+
+func (fi *s3FileInfo) Type() fs.FileMode {
+	return fi.Mode()
+}
+
 type s3File struct {
+	body     io.ReadCloser
 	fileInfo s3FileInfo
 }
 
@@ -119,14 +158,16 @@ func (f *s3File) Stat() (fs.FileInfo, error) {
 }
 
 func (f *s3File) Read(buf []byte) (int, error) {
-	panic("not implemented")
+	return f.body.Read(buf)
 }
 
 func (f *s3File) Close() error {
-	panic("not implemented")
+	return f.body.Close()
 }
 
 type s3Directory struct {
+	entries  []fs.DirEntry
+	ptr      int
 	fileInfo s3FileInfo
 }
 
@@ -135,13 +176,37 @@ func (d *s3Directory) Stat() (fs.FileInfo, error) {
 }
 
 func (d *s3Directory) Read(buf []byte) (int, error) {
-	panic("not implemented")
+	return 0, fmt.Errorf("cannot read a directory")
 }
 
 func (d *s3Directory) Close() error {
-	panic("not implemented")
+	return nil
 }
 
 func (d *s3Directory) ReadDir(n int) ([]fs.DirEntry, error) {
-	panic("not implemented")
+	out := []fs.DirEntry{}
+	if n >= 0 {
+		for d.ptr < len(d.entries) {
+			out = append(out, d.entries[d.ptr])
+			d.ptr++
+		}
+
+		return out, nil
+	}
+
+	target := d.ptr + n
+	if target > len(d.entries) {
+		target = len(d.entries)
+	}
+
+	for d.ptr < target {
+		out = append(out, d.entries[d.ptr])
+		d.ptr++
+	}
+
+	if len(out) == 0 {
+		return nil, io.EOF
+	}
+
+	return out, nil
 }
