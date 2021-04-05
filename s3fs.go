@@ -89,6 +89,7 @@ func (s *s3FS) Open(name string) (fs.File, error) {
 
 func openDir(s *s3FS, name string) (fs.File, error) {
 	entries := []fs.DirEntry{}
+	duplicateName := false
 	err := s.client.ListObjectsV2Pages(
 		&s3.ListObjectsV2Input{
 			Bucket:    &s.bucket,
@@ -97,6 +98,11 @@ func openDir(s *s3FS, name string) (fs.File, error) {
 		},
 		func(page *s3.ListObjectsV2Output, lastPage bool) bool {
 			for _, obj := range page.Contents {
+				if *obj.Key == name {
+					duplicateName = true
+					return false
+				}
+
 				entries = append(
 					entries,
 					&s3FileInfo{
@@ -125,6 +131,10 @@ func openDir(s *s3FS, name string) (fs.File, error) {
 
 	if err != nil {
 		return nil, fmt.Errorf("error listing s3 dir: %w", err)
+	}
+
+	if duplicateName {
+		return nil, fmt.Errorf("directory name matches file name: %s", name)
 	}
 
 	if len(entries) == 0 {

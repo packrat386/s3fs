@@ -43,28 +43,6 @@ func TestS3FS(t *testing.T) {
 	}
 }
 
-func TestS3FS_FileAndDir(t *testing.T) {
-	bucket := os.Getenv("S3FS_TESTING_BUCKET")
-	require.NotEqual(t, "", bucket, "S3FS_TESTING_BUCKET must be set")
-
-	sess, err := session.NewSession()
-	if err != nil {
-		panic(err)
-	}
-
-	client := s3.New(sess)
-	defer emptyBucket(client, bucket)
-
-	writeFile(client, bucket, "foo", `{"data":"foo"}`)
-	writeFile(client, bucket, "foo/bar", `{"data":"bar"}`)
-
-	myFS := NewS3FS(client, bucket)
-
-	_, err = myFS.Open("foo")
-	require.NotNil(t, err)
-	require.Contains(t, err.Error(), "directory name matches file name")
-}
-
 func TestS3FS_ReadFile(t *testing.T) {
 	bucket := os.Getenv("S3FS_TESTING_BUCKET")
 	require.NotEqual(t, "", bucket, "S3FS_TESTING_BUCKET must be set")
@@ -142,6 +120,28 @@ func TestS3FS_ReadDir_TrailingSlash(t *testing.T) {
 	require.True(t, dirEntriesContains(entries, "baz.json"))
 }
 
+func TestS3FS_FileAndDir(t *testing.T) {
+	bucket := os.Getenv("S3FS_TESTING_BUCKET")
+	require.NotEqual(t, "", bucket, "S3FS_TESTING_BUCKET must be set")
+
+	sess, err := session.NewSession()
+	if err != nil {
+		panic(err)
+	}
+
+	client := s3.New(sess)
+	defer emptyBucket(client, bucket)
+
+	writeFile(client, bucket, "foo", `{"data":"foo"}`)
+	writeFile(client, bucket, "foo/bar", `{"data":"bar"}`)
+
+	myFS := NewS3FS(client, bucket)
+
+	_, err = myFS.Open("foo")
+	require.NotNil(t, err)
+	require.Contains(t, err.Error(), "directory name matches file name")
+}
+
 func TestS3FS_FileEndingWithSlash(t *testing.T) {
 	bucket := os.Getenv("S3FS_TESTING_BUCKET")
 	require.NotEqual(t, "", bucket, "S3FS_TESTING_BUCKET must be set")
@@ -157,12 +157,9 @@ func TestS3FS_FileEndingWithSlash(t *testing.T) {
 	writeFile(client, bucket, "weird/", `{"data":"weird"}`)
 
 	myFS := NewS3FS(client, bucket)
-	f, err := myFS.Open("weird/")
-	require.Nil(t, err)
-
-	info, err := f.Stat()
-	require.Nil(t, err)
-	require.True(t, info.IsDir())
+	_, err = myFS.Open("weird/")
+	require.NotNil(t, err)
+	require.Contains(t, err.Error(), "directory name matches file name")
 }
 
 func dirEntriesContains(entries []fs.DirEntry, name string) bool {
