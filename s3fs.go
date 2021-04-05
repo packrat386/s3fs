@@ -174,7 +174,7 @@ func openFile(s *s3FS, name string) (fs.File, error) {
 }
 
 func trimName(name string) (string, error) {
-	if name == "./." || name == "/" {
+	if !fs.ValidPath(name) {
 		return "", fmt.Errorf("invalid name: %s", name)
 	}
 
@@ -182,12 +182,9 @@ func trimName(name string) (string, error) {
 		return "", nil
 	}
 
-	return strings.TrimSuffix(
-		strings.TrimPrefix(
-			name,
-			"./",
-		),
-		"/",
+	return strings.TrimPrefix(
+		name,
+		"./",
 	), nil
 }
 

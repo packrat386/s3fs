@@ -94,32 +94,6 @@ func TestS3FS_ReadDir(t *testing.T) {
 	require.True(t, dirEntriesContains(entries, "baz.json"))
 }
 
-func TestS3FS_ReadDir_TrailingSlash(t *testing.T) {
-	bucket := os.Getenv("S3FS_TESTING_BUCKET")
-	require.NotEqual(t, "", bucket, "S3FS_TESTING_BUCKET must be set")
-
-	sess, err := session.NewSession()
-	if err != nil {
-		panic(err)
-	}
-
-	client := s3.New(sess)
-	defer emptyBucket(client, bucket)
-
-	writeFile(client, bucket, "mydir/foo.json", `{"data":"foo"}`)
-	writeFile(client, bucket, "mydir/bar.json", `{"data":"bar"}`)
-	writeFile(client, bucket, "mydir/baz.json", `{"data":"baz"}`)
-
-	myFS := NewS3FS(client, bucket)
-
-	entries, err := fs.ReadDir(myFS, "mydir/")
-	require.Nil(t, err)
-	require.Equal(t, 3, len(entries))
-	require.True(t, dirEntriesContains(entries, "foo.json"))
-	require.True(t, dirEntriesContains(entries, "bar.json"))
-	require.True(t, dirEntriesContains(entries, "baz.json"))
-}
-
 func TestS3FS_FileAndDir(t *testing.T) {
 	bucket := os.Getenv("S3FS_TESTING_BUCKET")
 	require.NotEqual(t, "", bucket, "S3FS_TESTING_BUCKET must be set")
@@ -159,7 +133,7 @@ func TestS3FS_FileEndingWithSlash(t *testing.T) {
 	myFS := NewS3FS(client, bucket)
 	_, err = myFS.Open("weird/")
 	require.NotNil(t, err)
-	require.Contains(t, err.Error(), "directory name matches file name")
+	require.Contains(t, err.Error(), "invalid name")
 }
 
 func dirEntriesContains(entries []fs.DirEntry, name string) bool {
