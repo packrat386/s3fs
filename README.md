@@ -1,11 +1,120 @@
 s3fs
 ----
 
+[![Go Reference](https://pkg.go.dev/badge/github.com/packrat386/s3fs.svg)](https://pkg.go.dev/github.com/packrat386/s3fs)
+
 `io/fs` implementation backed by S3.
 
 ## How it works
 
 This allows you to essentially treat S3 as a readable filsystem. `/` delimited common prefixes of keys are treated as "directories" with "files" at the base. So if you had an object with the key `some/long/key.json`, this would see a directory named `some` that contains a directory named `long` that contains a file named `key.json`. Implements the full `io/fs.FS` interface, so you can do all that fun stuff.
+
+### Example
+
+Reading a file
+
+```go
+package main
+
+import (
+	"io"
+	"os"
+	"strings"
+
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/s3"
+	"github.com/packrat386/s3fs"
+)
+
+func main() {
+	bucket := os.Getenv("S3FS_BUCKET")
+	sess, err := session.NewSession()
+	if err != nil {
+		panic(err)
+	}
+
+	client := s3.New(sess)
+
+	writeFile(client, bucket, "some/file.json", `{"my":"data"}`)
+
+	myFS := s3fs.NewS3FS(client, bucket)
+
+	f, err := myFS.Open("some/file.json")
+	if err != nil {
+		panic(err)
+	}
+
+	io.Copy(os.Stdout, f)
+}
+
+func writeFile(client *s3.S3, bucket, key, body string) {
+	_, err := client.PutObject(&s3.PutObjectInput{
+		Body:   aws.ReadSeekCloser(strings.NewReader(body)),
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+	})
+
+	if err != nil {
+		panic(err)
+	}
+}
+```
+
+Reading a directory
+
+```go
+package main
+
+import (
+	"fmt"
+	"io/fs"
+	"os"
+	"strings"
+
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/s3"
+	"github.com/packrat386/s3fs"
+)
+
+func main() {
+	bucket := os.Getenv("S3FS_BUCKET")
+	sess, err := session.NewSession()
+	if err != nil {
+		panic(err)
+	}
+
+	client := s3.New(sess)
+
+	writeFile(client, bucket, "mydir/foo.json", `{"data":"foo"}`)
+	writeFile(client, bucket, "mydir/bar.json", `{"data":"bar"}`)
+	writeFile(client, bucket, "mydir/baz.json", `{"data":"baz"}`)
+
+	myFS := s3fs.NewS3FS(client, bucket)
+
+	entries, err := fs.ReadDir(myFS, "mydir")
+	if err != nil {
+		panic(err)
+	}
+
+	for _, entry := range entries {
+		fmt.Println(entry.Name())
+	}
+}
+
+func writeFile(client *s3.S3, bucket, key, body string) {
+	_, err := client.PutObject(&s3.PutObjectInput{
+		Body:   aws.ReadSeekCloser(strings.NewReader(body)),
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+	})
+
+	if err != nil {
+		panic(err)
+	}
+}
+```
 
 ### Caveats
 
