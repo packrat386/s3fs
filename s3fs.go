@@ -5,10 +5,10 @@ import (
 	"io"
 	"io/fs"
 	"path"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/service/s3"
 )
 
@@ -25,38 +25,71 @@ func NewS3FS(client *s3.S3, bucket string) fs.FS {
 }
 
 func (s *s3FS) Open(name string) (fs.File, error) {
-	object, err := s.client.GetObject(&s3.GetObjectInput{
-		Bucket: &s.bucket,
-		Key:    &name,
-	})
-
-	// the error handling here looks strange because it is. If this request didn't
-	// fail then we have a file. If it failed in a very particular way (key not found)
-	// then we still want to check if it's a directory. Any other failure we wrap
-	// and propagate.
-	if err == nil {
-		return &s3File{
-			body: object.Body,
-			fileInfo: s3FileInfo{
-				name:    path.Base(name),
-				mode:    fs.FileMode(0400),
-				size:    *object.ContentLength,
-				modTime: *object.LastModified,
-			},
-		}, nil
+	name, err := trimName(name)
+	if err != nil {
+		return nil, fmt.Errorf("could not format filename: %w", err)
 	}
 
-	awsErr, ok := err.(awserr.Error)
-	if !ok {
-		return nil, fmt.Errorf("error GETing s3 file: %w", err)
+	// special case root of the bucket
+	if name == "" {
+		return openDir(s, name)
 	}
 
-	if awsErr.Code() != s3.ErrCodeNoSuchKey {
-		return nil, fmt.Errorf("error GETing s3 file: %w", err)
-	}
+	// could be either a file or a directory at this point, so list with the name as a prefix.
+	// if we find an exact match for either an object or a common prefix, then open that.
+	// if neither match the name exactly then for our purposes it doesn't exist.
+	//
+	// note that because s3 isn't really a filesystem, its possible to find both an object
+	// and a common prefix with the same exact name as `name`. If both match return an error.
 
-	entries := []fs.DirEntry{}
+	fileMatch := false
+	dirMatch := false
+
 	err = s.client.ListObjectsV2Pages(
+		&s3.ListObjectsV2Input{
+			Bucket:    &s.bucket,
+			Delimiter: aws.String("/"),
+			Prefix:    aws.String(name),
+		},
+		func(page *s3.ListObjectsV2Output, lastPage bool) bool {
+			for _, obj := range page.Contents {
+				if *obj.Key == name {
+					fileMatch = true
+				}
+			}
+
+			for _, cp := range page.CommonPrefixes {
+				if name+"/" == *cp.Prefix {
+					dirMatch = true
+				}
+			}
+
+			return true
+		},
+	)
+
+	if err != nil {
+		return nil, fmt.Errorf("could not list s3 objects: %w", err)
+	}
+
+	if fileMatch && dirMatch {
+		return nil, fmt.Errorf("directory name matches file name: %s", name)
+	}
+
+	if fileMatch {
+		return openFile(s, name)
+	}
+
+	if dirMatch {
+		return openDir(s, name+"/")
+	}
+
+	return nil, fs.ErrNotExist
+}
+
+func openDir(s *s3FS, name string) (fs.File, error) {
+	entries := []fs.DirEntry{}
+	err := s.client.ListObjectsV2Pages(
 		&s3.ListObjectsV2Input{
 			Bucket:    &s.bucket,
 			Delimiter: aws.String("/"),
@@ -109,6 +142,45 @@ func (s *s3FS) Open(name string) (fs.File, error) {
 	}, nil
 }
 
+func openFile(s *s3FS, name string) (fs.File, error) {
+	object, err := s.client.GetObject(&s3.GetObjectInput{
+		Bucket: &s.bucket,
+		Key:    &name,
+	})
+
+	if err != nil {
+		return nil, fmt.Errorf("error getting s3 object: %w", err)
+	}
+
+	return &s3File{
+		body: object.Body,
+		fileInfo: s3FileInfo{
+			name:    path.Base(name),
+			mode:    fs.FileMode(0400),
+			size:    *object.ContentLength,
+			modTime: *object.LastModified,
+		},
+	}, nil
+}
+
+func trimName(name string) (string, error) {
+	if name == "./." || name == "/" {
+		return "", fmt.Errorf("invalid name: %s", name)
+	}
+
+	if name == "." {
+		return "", nil
+	}
+
+	return strings.TrimSuffix(
+		strings.TrimPrefix(
+			name,
+			"./",
+		),
+		"/",
+	), nil
+}
+
 type s3FileInfo struct {
 	name    string
 	size    int64
@@ -145,7 +217,7 @@ func (fi *s3FileInfo) Info() (fs.FileInfo, error) {
 }
 
 func (fi *s3FileInfo) Type() fs.FileMode {
-	return fi.Mode()
+	return fi.Mode().Type()
 }
 
 type s3File struct {
@@ -185,7 +257,7 @@ func (d *s3Directory) Close() error {
 
 func (d *s3Directory) ReadDir(n int) ([]fs.DirEntry, error) {
 	out := []fs.DirEntry{}
-	if n >= 0 {
+	if n <= 0 {
 		for d.ptr < len(d.entries) {
 			out = append(out, d.entries[d.ptr])
 			d.ptr++
