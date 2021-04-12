@@ -132,4 +132,4 @@ As long as that configuration is available, you should be able to test with `go 
 
 ## Should I Use This?
 
-This is pre v1, and not in any way battle tested, so I wouldn't for anything important. Really just making it open source so I can have a public implementation to look at.
+This project is at v1 now. I have used it in production and found it satisfactory, although it still hasn't been heavily tested for efficiency (time, memory, or money) so use at your own risk.
