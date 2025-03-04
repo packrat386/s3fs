@@ -38,7 +38,17 @@ func TestS3FS(t *testing.T) {
 
 	myFS := NewS3FS(client, bucket)
 
-	if err := fstest.TestFS(myFS, "dir-b/foo.json"); err != nil {
+	err = fstest.TestFS(
+		myFS,
+		"top.json",
+		"deep/down/top.json",
+		"dir-a/one.json",
+		"dir-a/two.json",
+		"dir-a/three.json",
+		"dir-b/foo.json",
+	)
+
+	if err != nil {
 		t.Fatal(err)
 	}
 }
@@ -134,16 +144,6 @@ func TestS3FS_FileEndingWithSlash(t *testing.T) {
 	_, err = myFS.Open("weird/")
 	require.NotNil(t, err)
 	require.Contains(t, err.Error(), "invalid name")
-}
-
-func dirEntriesContains(entries []fs.DirEntry, name string) bool {
-	for _, e := range entries {
-		if e.Name() == name {
-			return true
-		}
-	}
-
-	return false
 }
 
 func writeFile(client *s3.S3, bucket, key, body string) {
